@@ -32,15 +32,19 @@ npm install
 |----------|-----------|-------------|--------|
 | `PORT` | Porta do servidor HTTP | Não | `3000` |
 | `RABBIT_URL` | URL de conexão RabbitMQ | **Sim** | - |
+| `WEBHOOK_SECRET` | Token secreto para autenticação | **Sim** | - |
 | `RABBIT_EXCHANGE` | Nome do exchange | Não | `whatsapp.events` |
 | `RABBIT_QUEUE` | Nome da queue | Não | `whatsapp.incoming` |
 | `RABBIT_ROUTING_KEY` | Routing key | Não | `whatsapp.incoming` |
 
-### Exemplo de RABBIT_URL
+### Exemplo de Variáveis
 
+```env
+RABBIT_URL=amqp://usuario:senha@rabbitmq:5672/whatsapp
+WEBHOOK_SECRET=super_secret_whatsapp_token_123
 ```
-amqp://usuario:senha@rabbitmq:5672/whatsapp
-```
+
+> ⚠️ **Importante**: `WEBHOOK_SECRET` nunca deve ser versionado no código. Use apenas variáveis de ambiente.
 
 ## 🐳 Docker
 
@@ -56,6 +60,7 @@ docker build -t whatsapp-webhook .
 docker run -d \
   -p 3000:3000 \
   -e RABBIT_URL=amqp://usuario:senha@rabbitmq:5672/whatsapp \
+  -e WEBHOOK_SECRET=super_secret_whatsapp_token_123 \
   -e RABBIT_EXCHANGE=whatsapp.events \
   -e RABBIT_QUEUE=whatsapp.incoming \
   -e RABBIT_ROUTING_KEY=whatsapp.incoming \
@@ -68,7 +73,18 @@ docker run -d \
 
 Recebe eventos do WhatsApp e publica no RabbitMQ.
 
-**Request:**
+**Autenticação obrigatória:**
+```
+Authorization: Bearer WEBHOOK_SECRET
+```
+
+**Request Headers:**
+```
+Authorization: Bearer super_secret_whatsapp_token_123
+Content-Type: application/json
+```
+
+**Request Body:**
 ```json
 {
   "event": "message",
@@ -78,9 +94,18 @@ Recebe eventos do WhatsApp e publica no RabbitMQ.
 
 **Response:**
 - `200` - Evento enfileirado com sucesso
+- `401` - Token inválido ou ausente (não publica nada)
 - `400` - Payload inválido
 - `503` - RabbitMQ indisponível
 - `500` - Erro interno
+
+**Exemplo com cURL:**
+```bash
+curl -X POST https://whatsapp.api.sofiainsights.com.br/webhook/whatsapp \
+  -H "Authorization: Bearer super_secret_whatsapp_token_123" \
+  -H "Content-Type: application/json" \
+  -d '{"event": "message", "data": {}}'
+```
 
 ### GET /health
 

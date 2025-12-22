@@ -17,10 +17,13 @@
 ```env
 PORT=3000
 RABBIT_URL=amqp://sofiafila:SENHA@rabbitmq:5672/whatsapp
+WEBHOOK_SECRET=super_secret_whatsapp_token_123
 RABBIT_EXCHANGE=whatsapp.events
 RABBIT_QUEUE=whatsapp.incoming
 RABBIT_ROUTING_KEY=whatsapp.incoming
 ```
+
+> ⚠️ **Segurança**: `WEBHOOK_SECRET` nunca deve ser versionado no código. Use apenas variáveis de ambiente.
 
 > ⚠️ **Importante**: `rabbitmq` é o nome do serviço no EasyPanel (DNS interno)
 
@@ -49,18 +52,23 @@ RABBIT_ROUTING_KEY=whatsapp.incoming
 
 ## 🧪 Testes
 
-- [ ] **Webhook recebe** eventos do WhatsApp
-- [ ] **Mensagens publicadas** no RabbitMQ
+- [ ] **Autenticação** funciona (Bearer Token válido → 200, inválido → 401)
+- [ ] **Webhook recebe** eventos do WhatsApp com token válido
+- [ ] **Mensagens publicadas** no RabbitMQ apenas com token válido
+- [ ] **Token inválido** não publica nada (retorna 401)
 - [ ] **Reconexão automática** funciona após queda do RabbitMQ
 - [ ] **Healthcheck** retorna status correto
 - [ ] **Múltiplas instâncias** funcionam em paralelo
 
 ## 🔒 Segurança
 
+- [ ] **WEBHOOK_SECRET** configurado (token secreto para autenticação)
+- [ ] **Bearer Token** validado em todas as requisições
 - [ ] **Credenciais** em variáveis de ambiente (não hardcoded)
 - [ ] **Validação de payload** ativa
 - [ ] **Rate limiting** (se necessário via Cloudflare)
 - [ ] **HTTPS** obrigatório
+- [ ] **401 Unauthorized** retornado para tokens inválidos (não publica nada)
 
 ## 📝 Fluxo Final
 

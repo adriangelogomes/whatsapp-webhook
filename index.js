@@ -23,6 +23,7 @@ app.use(express.json({ limit: "2mb" }));
 // ============================
 const PORT = process.env.PORT || 3000;
 const RABBIT_URL = process.env.RABBIT_URL;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 const EXCHANGE = process.env.RABBIT_EXCHANGE || "whatsapp.events";
 const QUEUE = process.env.RABBIT_QUEUE || "whatsapp.incoming";
@@ -31,6 +32,11 @@ const ROUTING_KEY = process.env.RABBIT_ROUTING_KEY || "whatsapp.incoming";
 // Validação de variáveis obrigatórias
 if (!RABBIT_URL) {
   console.error("❌ RABBIT_URL é obrigatória");
+  process.exit(1);
+}
+
+if (!WEBHOOK_SECRET) {
+  console.error("❌ WEBHOOK_SECRET é obrigatória");
   process.exit(1);
 }
 
@@ -114,6 +120,53 @@ async function connectRabbit() {
 connectRabbit();
 
 // ============================
+// Middleware de autenticação
+// ============================
+/**
+ * Valida Bearer Token no header Authorization
+ * 
+ * Formato esperado: Authorization: Bearer SEU_TOKEN
+ * 
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ * @param {Function} next - Next middleware
+ * @returns {void}
+ */
+function validateWebhookSecret(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  // Verifica se header existe
+  if (!authHeader) {
+    return res.status(401).json({
+      error: "Unauthorized",
+      message: "Token de autenticação não fornecido"
+    });
+  }
+
+  // Verifica formato Bearer
+  const parts = authHeader.split(" ");
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    return res.status(401).json({
+      error: "Unauthorized",
+      message: "Formato de token inválido. Use: Authorization: Bearer TOKEN"
+    });
+  }
+
+  const token = parts[1];
+
+  // Valida token
+  if (token !== WEBHOOK_SECRET) {
+    return res.status(401).json({
+      error: "Unauthorized",
+      message: "Token inválido"
+    });
+  }
+
+  // Token válido, continua
+  next();
+}
+
+// ============================
 // Healthcheck REAL (Cloudflare-friendly)
 // ============================
 /**
@@ -152,16 +205,24 @@ app.get("/health", (req, res) => {
 /**
  * Endpoint principal do webhook
  * 
- * Recebe eventos do WhatsApp, valida e publica no RabbitMQ
+ * Recebe eventos do WhatsApp, valida autenticação, valida payload
+ * e publica no RabbitMQ.
+ * 
+ * Segurança:
+ * - Requer Bearer Token no header Authorization
+ * - Token validado via variável WEBHOOK_SECRET
+ * - Não publica nada se token inválido
  * 
  * @route POST /webhook/whatsapp
+ * @header Authorization: Bearer WEBHOOK_SECRET
  * @param {Object} req.body - Payload do evento WhatsApp
  * @returns {number} 200 - Evento enfileirado com sucesso
+ * @returns {number} 401 - Token inválido ou ausente
  * @returns {number} 400 - Payload inválido
  * @returns {number} 503 - RabbitMQ indisponível
  * @returns {number} 500 - Erro interno
  */
-app.post("/webhook/whatsapp", async (req, res) => {
+app.post("/webhook/whatsapp", validateWebhookSecret, async (req, res) => {
   try {
     // Valida se RabbitMQ está conectado
     if (!channel) {
