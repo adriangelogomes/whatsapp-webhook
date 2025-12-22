@@ -1,0 +1,15 @@
+{
+  "name": "whatsapp-webhook",
+  "version": "1.0.0",
+  "description": "Webhook WhatsApp -> RabbitMQ (produção)",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.3",
+    "express": "^4.19.2"
+  }
+}
+
