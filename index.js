@@ -40,10 +40,13 @@ if (!RABBIT_URL) {
 let channel = null;
 let connection = null;
 let isConnecting = false;
+let retryCount = 0;
+const MAX_RETRY_LOG = 5; // Loga apenas a cada 5 tentativas para não poluir logs
 
 /**
  * Conecta ao RabbitMQ e configura exchange/queue
- * Implementa reconexão automática em caso de falha
+ * Implementa reconexão automática com retry inteligente
+ * Logs limpos em produção (sem erros "feios")
  */
 async function connectRabbit() {
   if (isConnecting) {
@@ -67,23 +70,42 @@ async function connectRabbit() {
 
     // Tratamento de desconexão
     connection.on("close", () => {
-      console.warn("⚠️ Conexão RabbitMQ fechada. Tentando reconectar...");
+      if (channel) {
+        console.log("⏳ RabbitMQ desconectado, reconectando...");
+      }
       channel = null;
       connection = null;
       isConnecting = false;
+      retryCount = 0;
       setTimeout(connectRabbit, 5000);
     });
 
     connection.on("error", (err) => {
-      console.error("❌ Erro na conexão RabbitMQ:", err);
+      // Log silencioso - retry vai tratar
+      if (retryCount % MAX_RETRY_LOG === 0) {
+        console.log("⏳ RabbitMQ indisponível, tentando novamente...");
+      }
     });
 
-    console.log("🐰 RabbitMQ conectado");
+    // Reset retry count em caso de sucesso
+    if (retryCount > 0) {
+      console.log("✅ RabbitMQ reconectado");
+      retryCount = 0;
+    } else {
+      console.log("🐰 RabbitMQ conectado");
+    }
+    
     isConnecting = false;
   } catch (err) {
-    console.error("❌ Erro ao conectar RabbitMQ:", err);
+    retryCount++;
+    
+    // Log limpo - apenas a cada N tentativas para não poluir logs
+    if (retryCount === 1 || retryCount % MAX_RETRY_LOG === 0) {
+      console.log("⏳ RabbitMQ indisponível, tentando novamente em 5s...");
+    }
+    
     isConnecting = false;
-    // Tenta reconectar após 5 segundos
+    // Retry com delay de 5 segundos
     setTimeout(connectRabbit, 5000);
   }
 }
@@ -92,21 +114,36 @@ async function connectRabbit() {
 connectRabbit();
 
 // ============================
-// Healthcheck
+// Healthcheck REAL (Cloudflare-friendly)
 // ============================
 /**
  * Endpoint de healthcheck
- * Retorna status do serviço e conexão RabbitMQ
+ * 
+ * Retorna status real do serviço e conexão RabbitMQ.
+ * Retorna 503 quando RabbitMQ está desconectado para:
+ * - Cloudflare detectar falha
+ * - Load Balancer remover instância ruim
+ * - Monitoramento alertar corretamente
+ * 
+ * @route GET /health
+ * @returns {Object} 200 - Serviço e RabbitMQ OK
+ * @returns {Object} 503 - RabbitMQ desconectado
  */
 app.get("/health", (req, res) => {
-  const status = {
-    status: "ok",
-    rabbitmq: channel !== null ? "connected" : "disconnected",
-    timestamp: new Date().toISOString()
-  };
+  // Healthcheck REAL: verifica RabbitMQ, não só HTTP
+  if (!channel) {
+    return res.status(503).json({ 
+      status: "rabbit_disconnected",
+      rabbitmq: "disconnected",
+      timestamp: new Date().toISOString()
+    });
+  }
 
-  const statusCode = channel !== null ? 200 : 503;
-  res.status(statusCode).json(status);
+  res.json({ 
+    status: "ok",
+    rabbitmq: "connected",
+    timestamp: new Date().toISOString()
+  });
 });
 
 // ============================
@@ -128,7 +165,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
   try {
     // Valida se RabbitMQ está conectado
     if (!channel) {
-      console.error("❌ RabbitMQ não conectado");
+      // Log silencioso - retry está tratando
       return res.status(503).json({ 
         error: "RabbitMQ indisponível",
         message: "Serviço temporariamente indisponível"
@@ -158,7 +195,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
     );
 
     if (!published) {
-      console.error("❌ Falha ao publicar no RabbitMQ (buffer cheio)");
+      // Log silencioso - buffer cheio, mas não é erro crítico
       return res.status(503).json({ 
         error: "Falha ao enfileirar",
         message: "RabbitMQ temporariamente indisponível"
@@ -167,7 +204,10 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Erro no webhook:", err);
+    // Log apenas erros reais, não falhas de conexão (já tratadas)
+    if (err.code !== "ECONNREFUSED" && err.code !== "ENOTFOUND") {
+      console.error("❌ Erro no webhook:", err.message);
+    }
     res.status(500).json({ 
       error: "Erro interno",
       message: "Falha ao processar webhook"
@@ -179,7 +219,10 @@ app.post("/webhook/whatsapp", async (req, res) => {
 // Tratamento de erros não capturados
 // ============================
 process.on("unhandledRejection", (reason, promise) => {
-  console.error("❌ Unhandled Rejection:", reason);
+  // Log apenas erros reais, ignora erros de conexão RabbitMQ (já tratados)
+  if (reason?.code !== "ECONNREFUSED" && reason?.code !== "ENOTFOUND") {
+    console.error("❌ Unhandled Rejection:", reason);
+  }
 });
 
 process.on("uncaughtException", (err) => {

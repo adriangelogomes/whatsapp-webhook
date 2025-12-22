@@ -5,10 +5,12 @@ Webhook HTTP que recebe eventos do WhatsApp e publica no RabbitMQ para processam
 ## 🚀 Características
 
 - **Stateless**: Escala horizontal sem estado compartilhado
-- **Alta disponibilidade**: Reconexão automática ao RabbitMQ
+- **Alta disponibilidade**: Reconexão automática ao RabbitMQ com retry inteligente
 - **Validação**: Validação de payload e variáveis de ambiente
 - **Produção-ready**: Dockerfile otimizado, tratamento de erros robusto
-- **Healthcheck**: Endpoint de monitoramento com status do RabbitMQ
+- **Healthcheck REAL**: Endpoint que retorna 503 quando RabbitMQ desconectado (Cloudflare-friendly)
+- **Logs limpos**: Sem erros "feios" em produção, retry silencioso
+- **Load Balancer ready**: Healthcheck permite remoção automática de instâncias ruins
 
 ## 📋 Pré-requisitos
 
@@ -82,9 +84,9 @@ Recebe eventos do WhatsApp e publica no RabbitMQ.
 
 ### GET /health
 
-Healthcheck do serviço.
+Healthcheck REAL do serviço (Cloudflare-friendly).
 
-**Response:**
+**Response 200 (OK):**
 ```json
 {
   "status": "ok",
@@ -92,6 +94,20 @@ Healthcheck do serviço.
   "timestamp": "2024-01-01T00:00:00.000Z"
 }
 ```
+
+**Response 503 (RabbitMQ desconectado):**
+```json
+{
+  "status": "rabbit_disconnected",
+  "rabbitmq": "disconnected",
+  "timestamp": "2024-01-01T00:00:00.000Z"
+}
+```
+
+> ⚠️ **Importante**: Retorna 503 quando RabbitMQ está desconectado para:
+> - Cloudflare detectar falha automaticamente
+> - Load Balancer remover instâncias ruins
+> - Monitoramento alertar corretamente
 
 ## 🔄 Fluxo de Produção
 
