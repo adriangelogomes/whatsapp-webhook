@@ -22,26 +22,64 @@ app.use(express.json({ limit: "2mb" }));
 // Sistema de Logging
 // ============================
 /**
- * Gera timestamp no horário local do servidor
- * Formato: YYYY-MM-DDTHH:mm:ss.sss (horário local, não UTC)
+ * Gera timestamp no horário de São Paulo (America/Sao_Paulo)
+ * Formato: YYYY-MM-DDTHH:mm:ss.sss-03:00 (horário de São Paulo)
+ * 
+ * Usa Intl.DateTimeFormat para garantir horário correto considerando horário de verão
  */
 function getLocalTimestamp() {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const seconds = String(now.getSeconds()).padStart(2, '0');
+  
+  // Converte para horário de São Paulo usando Intl
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  // Formata partes da data
+  const parts = formatter.formatToParts(now);
+  const year = parts.find(p => p.type === 'year').value;
+  const month = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  const hours = parts.find(p => p.type === 'hour').value;
+  const minutes = parts.find(p => p.type === 'minute').value;
+  const seconds = parts.find(p => p.type === 'second').value;
+  
+  // Milissegundos
   const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
   
-  // Timezone offset
-  const offset = -now.getTimezoneOffset();
-  const offsetHours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
-  const offsetMinutes = String(Math.abs(offset) % 60).padStart(2, '0');
-  const offsetSign = offset >= 0 ? '+' : '-';
+  // Calcula offset de São Paulo usando Intl.DateTimeFormat
+  // Cria duas datas formatadas (SP e UTC) e compara
+  const spFormatter = new Intl.DateTimeFormat('en', {
+    timeZone: 'America/Sao_Paulo',
+    timeZoneName: 'longOffset'
+  });
   
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${offsetSign}${offsetHours}:${offsetMinutes}`;
+  // Tenta obter offset diretamente
+  let offsetHours = -3; // Default UTC-3 (horário padrão de São Paulo)
+  let offsetMinutes = 0;
+  
+  // Calcula offset real comparando horários
+  const spTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const utcTime = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const diffMs = spTime.getTime() - utcTime.getTime();
+  const diffHours = diffMs / (1000 * 60 * 60);
+  
+  // Arredonda para o offset mais próximo (geralmente -3 ou -2)
+  offsetHours = Math.round(diffHours);
+  if (offsetHours < -12) offsetHours += 24;
+  if (offsetHours > 12) offsetHours -= 24;
+  
+  const offsetSign = offsetHours >= 0 ? '+' : '-';
+  const absOffsetHours = Math.abs(offsetHours);
+  
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${offsetSign}${String(absOffsetHours).padStart(2, '0')}:${String(offsetMinutes).padStart(2, '0')}`;
 }
 
 /**
