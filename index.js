@@ -272,8 +272,14 @@ connectRabbit();
 // ============================
 /**
  * Middleware para logar todas as requisições HTTP
+ * EXCETO GET /webhook/whatsapp (já tem logging próprio e não deve ter interferência)
  */
 app.use((req, res, next) => {
+  // Pula logging para GET /webhook/whatsapp (já tem logging detalhado e precisa resposta limpa)
+  if (req.method === 'GET' && req.path === '/webhook/whatsapp') {
+    return next();
+  }
+  
   const startTime = Date.now();
   
   // Intercepta o método end para calcular tempo de resposta
