@@ -11,6 +11,7 @@ Webhook HTTP que recebe eventos do WhatsApp e publica no RabbitMQ para processam
 - **Healthcheck REAL**: Endpoint que retorna 503 quando RabbitMQ desconectado (Cloudflare-friendly)
 - **Logs limpos**: Sem erros "feios" em produção, retry silencioso
 - **Load Balancer ready**: Healthcheck permite remoção automática de instâncias ruins
+- **Logging completo**: Logs estruturados em JSON de todas as requisições, erros e payloads
 
 ## 📋 Pré-requisitos
 
