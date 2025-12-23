@@ -415,6 +415,8 @@ app.get("/health", (req, res) => {
  * @returns {number} 403 - Token de verificação inválido
  * @returns {number} 400 - Parâmetros inválidos
  */
+// Endpoint GET para validação do Meta - DEVE estar ANTES do middleware de logging
+// para evitar interferência nos headers da resposta
 app.get("/webhook/whatsapp", (req, res) => {
   const startTime = Date.now();
   const requestId = `get_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -449,7 +451,8 @@ app.get("/webhook/whatsapp", (req, res) => {
       challenge: challenge, // Loga o challenge completo
       hasVerifyToken: !!verifyToken,
       verifyTokenLength: verifyToken?.length || 0,
-      verifyTokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente"
+      verifyTokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
+      expectedTokenLength: WEBHOOK_SECRET?.length || 0
     },
     queryParams: Object.keys(req.query),
     queryString: req.url.split('?')[1] || ''
@@ -468,13 +471,16 @@ app.get("/webhook/whatsapp", (req, res) => {
       responseStatus: 400
     });
     
-    // Retorna erro como texto (Meta espera texto, não JSON)
-    res.status(400).setHeader('Content-Type', 'text/plain');
-    return res.send('Invalid mode: hub.mode deve ser "subscribe"');
+    // Meta espera resposta simples em caso de erro
+    res.status(400);
+    res.setHeader('Content-Type', 'text/plain');
+    return res.end('Invalid mode');
   }
   
-  // Valida hub.verify_token
-  if (!verifyToken || verifyToken !== WEBHOOK_SECRET) {
+  // Valida hub.verify_token - comparação exata e case-sensitive
+  const tokenMatch = verifyToken && verifyToken === WEBHOOK_SECRET;
+  
+  if (!tokenMatch) {
     const processingTime = Date.now() - startTime;
     log("WARN", "GET /webhook/whatsapp - Verificação falhou: token inválido", {
       requestId,
@@ -482,14 +488,17 @@ app.get("/webhook/whatsapp", (req, res) => {
       tokenLength: verifyToken?.length || 0,
       tokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
       expectedLength: WEBHOOK_SECRET?.length || 0,
-      tokensMatch: verifyToken === WEBHOOK_SECRET,
+      tokensMatch: false,
+      verifyTokenReceived: verifyToken || "ausente",
+      webhookSecretPrefix: WEBHOOK_SECRET ? WEBHOOK_SECRET.substring(0, 8) + "***" : "ausente",
       processingTime: `${processingTime}ms`,
       responseStatus: 403
     });
     
-    // Retorna erro como texto (Meta espera texto, não JSON)
-    res.status(403).setHeader('Content-Type', 'text/plain');
-    return res.send('Invalid verify token');
+    // Meta espera resposta simples em caso de erro
+    res.status(403);
+    res.setHeader('Content-Type', 'text/plain');
+    return res.end('Invalid verify token');
   }
   
   // Valida hub.challenge
@@ -502,29 +511,34 @@ app.get("/webhook/whatsapp", (req, res) => {
       responseStatus: 400
     });
     
-    // Retorna erro como texto (Meta espera texto, não JSON)
-    res.status(400).setHeader('Content-Type', 'text/plain');
-    return res.send('Missing challenge');
+    // Meta espera resposta simples em caso de erro
+    res.status(400);
+    res.setHeader('Content-Type', 'text/plain');
+    return res.end('Missing challenge');
   }
   
   // Validação bem-sucedida - retorna o challenge como texto puro
   const processingTime = Date.now() - startTime;
+  const challengeString = String(challenge);
+  
   log("INFO", "GET /webhook/whatsapp - Verificação bem-sucedida, retornando challenge", {
     requestId,
     ip: clientIp,
-    challenge: challenge, // Loga o challenge completo para debug
-    challengeLength: challenge.length,
+    challenge: challengeString, // Loga o challenge completo para debug
+    challengeLength: challengeString.length,
     challengeType: typeof challenge,
     processingTime: `${processingTime}ms`,
     responseStatus: 200,
     responseContentType: 'text/plain',
-    responseBody: String(challenge)
+    responseBody: challengeString
   });
   
-  // IMPORTANTE: Retorna o challenge como texto puro (não JSON)
-  // O Meta espera apenas o valor do challenge, sem formatação
-  res.status(200).setHeader('Content-Type', 'text/plain');
-  res.send(String(challenge));
+  // IMPORTANTE: Meta espera EXATAMENTE o challenge como texto puro
+  // Sem headers extras, sem formatação, apenas o valor do challenge
+  res.status(200);
+  res.setHeader('Content-Type', 'text/plain');
+  // Usa res.end() em vez de res.send() para garantir resposta limpa
+  res.end(challengeString);
 });
 
 /**
