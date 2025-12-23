@@ -22,12 +22,35 @@ app.use(express.json({ limit: "2mb" }));
 // Sistema de Logging
 // ============================
 /**
+ * Gera timestamp no horário local do servidor
+ * Formato: YYYY-MM-DDTHH:mm:ss.sss (horário local, não UTC)
+ */
+function getLocalTimestamp() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+  
+  // Timezone offset
+  const offset = -now.getTimezoneOffset();
+  const offsetHours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0');
+  const offsetMinutes = String(Math.abs(offset) % 60).padStart(2, '0');
+  const offsetSign = offset >= 0 ? '+' : '-';
+  
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${offsetSign}${offsetHours}:${offsetMinutes}`;
+}
+
+/**
  * Função de logging estruturado
  * Formato JSON para facilitar parsing e análise
  */
 function log(level, message, data = {}) {
   const logEntry = {
-    timestamp: new Date().toISOString(),
+    timestamp: getLocalTimestamp(),
     level,
     message,
     ...data
@@ -327,14 +350,14 @@ app.get("/health", (req, res) => {
     return res.status(503).json({ 
       status: "rabbit_disconnected",
       rabbitmq: "disconnected",
-      timestamp: new Date().toISOString()
+      timestamp: getLocalTimestamp()
     });
   }
 
   res.json({ 
     status: "ok",
     rabbitmq: "connected",
-    timestamp: new Date().toISOString()
+    timestamp: getLocalTimestamp()
   });
 });
 
