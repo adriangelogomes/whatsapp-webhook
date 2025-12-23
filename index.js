@@ -416,27 +416,56 @@ app.get("/health", (req, res) => {
  * @returns {number} 400 - Parâmetros inválidos
  */
 app.get("/webhook/whatsapp", (req, res) => {
+  const startTime = Date.now();
+  const requestId = `get_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
   // Extrai parâmetros do query string
   const mode = req.query['hub.mode'];
   const challenge = req.query['hub.challenge'];
   const verifyToken = req.query['hub.verify_token'];
   
-  // Log da requisição de verificação
-  log("INFO", "Verificação de webhook do Meta recebida", {
-    ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'],
+  // IP real (considera proxies)
+  const clientIp = req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  
+  // Log completo da requisição recebida
+  log("INFO", "GET /webhook/whatsapp - Requisição de verificação do Meta recebida", {
+    requestId,
+    method: req.method,
+    path: req.path,
+    url: req.url,
+    query: req.query,
+    ip: clientIp,
     userAgent: req.get("user-agent"),
-    mode,
-    hasChallenge: !!challenge,
-    hasVerifyToken: !!verifyToken,
-    queryParams: Object.keys(req.query)
+    headers: {
+      host: req.headers.host,
+      'user-agent': req.get("user-agent"),
+      'x-forwarded-for': req.headers['x-forwarded-for'],
+      'x-real-ip': req.headers['x-real-ip']
+    },
+    params: {
+      mode,
+      hasChallenge: !!challenge,
+      challengeLength: challenge?.length || 0,
+      challenge: challenge, // Loga o challenge completo
+      hasVerifyToken: !!verifyToken,
+      verifyTokenLength: verifyToken?.length || 0,
+      verifyTokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente"
+    },
+    queryParams: Object.keys(req.query),
+    queryString: req.url.split('?')[1] || ''
   });
   
   // Valida hub.mode
   if (mode !== 'subscribe') {
-    log("WARN", "Verificação do Meta falhou - modo inválido", {
+    const processingTime = Date.now() - startTime;
+    log("WARN", "GET /webhook/whatsapp - Verificação falhou: modo inválido", {
+      requestId,
+      ip: clientIp,
       mode,
       expected: "subscribe",
-      ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for']
+      receivedMode: mode,
+      processingTime: `${processingTime}ms`,
+      responseStatus: 400
     });
     
     // Retorna erro como texto (Meta espera texto, não JSON)
@@ -446,11 +475,16 @@ app.get("/webhook/whatsapp", (req, res) => {
   
   // Valida hub.verify_token
   if (!verifyToken || verifyToken !== WEBHOOK_SECRET) {
-    log("WARN", "Verificação do Meta falhou - token inválido", {
-      ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'],
+    const processingTime = Date.now() - startTime;
+    log("WARN", "GET /webhook/whatsapp - Verificação falhou: token inválido", {
+      requestId,
+      ip: clientIp,
       tokenLength: verifyToken?.length || 0,
-      tokenPrefix: verifyToken ? verifyToken.substring(0, 4) + "***" : "ausente",
-      expectedLength: WEBHOOK_SECRET?.length || 0
+      tokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
+      expectedLength: WEBHOOK_SECRET?.length || 0,
+      tokensMatch: verifyToken === WEBHOOK_SECRET,
+      processingTime: `${processingTime}ms`,
+      responseStatus: 403
     });
     
     // Retorna erro como texto (Meta espera texto, não JSON)
@@ -460,8 +494,12 @@ app.get("/webhook/whatsapp", (req, res) => {
   
   // Valida hub.challenge
   if (!challenge) {
-    log("WARN", "Verificação do Meta falhou - challenge ausente", {
-      ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for']
+    const processingTime = Date.now() - startTime;
+    log("WARN", "GET /webhook/whatsapp - Verificação falhou: challenge ausente", {
+      requestId,
+      ip: clientIp,
+      processingTime: `${processingTime}ms`,
+      responseStatus: 400
     });
     
     // Retorna erro como texto (Meta espera texto, não JSON)
@@ -470,10 +508,17 @@ app.get("/webhook/whatsapp", (req, res) => {
   }
   
   // Validação bem-sucedida - retorna o challenge como texto puro
-  log("INFO", "Verificação do Meta bem-sucedida", {
-    ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'],
+  const processingTime = Date.now() - startTime;
+  log("INFO", "GET /webhook/whatsapp - Verificação bem-sucedida, retornando challenge", {
+    requestId,
+    ip: clientIp,
+    challenge: challenge, // Loga o challenge completo para debug
     challengeLength: challenge.length,
-    challenge: challenge // Loga o challenge completo para debug
+    challengeType: typeof challenge,
+    processingTime: `${processingTime}ms`,
+    responseStatus: 200,
+    responseContentType: 'text/plain',
+    responseBody: String(challenge)
   });
   
   // IMPORTANTE: Retorna o challenge como texto puro (não JSON)
