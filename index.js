@@ -416,66 +416,66 @@ app.get("/health", (req, res) => {
  * @returns {number} 400 - Parâmetros inválidos
  */
 app.get("/webhook/whatsapp", (req, res) => {
+  // Extrai parâmetros do query string
   const mode = req.query['hub.mode'];
   const challenge = req.query['hub.challenge'];
   const verifyToken = req.query['hub.verify_token'];
   
   // Log da requisição de verificação
   log("INFO", "Verificação de webhook do Meta recebida", {
-    ip: req.ip,
+    ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'],
     userAgent: req.get("user-agent"),
     mode,
     hasChallenge: !!challenge,
-    hasVerifyToken: !!verifyToken
+    hasVerifyToken: !!verifyToken,
+    queryParams: Object.keys(req.query)
   });
   
   // Valida hub.mode
   if (mode !== 'subscribe') {
     log("WARN", "Verificação do Meta falhou - modo inválido", {
       mode,
-      expected: "subscribe"
+      expected: "subscribe",
+      ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for']
     });
     
-    return res.status(400).json({
-      error: "Invalid mode",
-      message: "hub.mode deve ser 'subscribe'"
-    });
+    // Retorna erro como texto (Meta espera texto, não JSON)
+    return res.status(400).type('text').send('Invalid mode: hub.mode deve ser "subscribe"');
   }
   
   // Valida hub.verify_token
   if (!verifyToken || verifyToken !== WEBHOOK_SECRET) {
     log("WARN", "Verificação do Meta falhou - token inválido", {
-      ip: req.ip,
+      ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'],
       tokenLength: verifyToken?.length || 0,
-      tokenPrefix: verifyToken ? verifyToken.substring(0, 4) + "***" : "ausente"
+      tokenPrefix: verifyToken ? verifyToken.substring(0, 4) + "***" : "ausente",
+      expectedLength: WEBHOOK_SECRET?.length || 0
     });
     
-    return res.status(403).json({
-      error: "Invalid verify token",
-      message: "hub.verify_token inválido"
-    });
+    // Retorna erro como texto (Meta espera texto, não JSON)
+    return res.status(403).type('text').send('Invalid verify token');
   }
   
   // Valida hub.challenge
   if (!challenge) {
     log("WARN", "Verificação do Meta falhou - challenge ausente", {
-      ip: req.ip
+      ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for']
     });
     
-    return res.status(400).json({
-      error: "Missing challenge",
-      message: "hub.challenge é obrigatório"
-    });
+    // Retorna erro como texto (Meta espera texto, não JSON)
+    return res.status(400).type('text').send('Missing challenge');
   }
   
-  // Validação bem-sucedida - retorna o challenge
+  // Validação bem-sucedida - retorna o challenge como texto puro
   log("INFO", "Verificação do Meta bem-sucedida", {
-    ip: req.ip,
-    challengeLength: challenge.length
+    ip: req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'],
+    challengeLength: challenge.length,
+    challenge: challenge // Loga o challenge completo para debug
   });
   
-  // Retorna o challenge como texto plano (conforme especificação do Meta)
-  res.status(200).send(challenge);
+  // IMPORTANTE: Retorna o challenge como texto puro (não JSON)
+  // O Meta espera apenas o valor do challenge, sem formatação
+  res.status(200).type('text').send(String(challenge));
 });
 
 /**
