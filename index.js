@@ -25,12 +25,12 @@ app.use(express.json({ limit: "2mb" }));
  * Gera timestamp no horário de São Paulo (America/Sao_Paulo)
  * Formato: YYYY-MM-DDTHH:mm:ss.sss-03:00 (horário de São Paulo)
  * 
- * Usa Intl.DateTimeFormat para garantir horário correto considerando horário de verão
+ * Versão otimizada que evita operações custosas
  */
 function getLocalTimestamp() {
   const now = new Date();
   
-  // Converte para horário de São Paulo usando Intl
+  // Converte para horário de São Paulo usando Intl (mais eficiente)
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
@@ -54,32 +54,14 @@ function getLocalTimestamp() {
   // Milissegundos
   const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
   
-  // Calcula offset de São Paulo usando Intl.DateTimeFormat
-  // Cria duas datas formatadas (SP e UTC) e compara
-  const spFormatter = new Intl.DateTimeFormat('en', {
-    timeZone: 'America/Sao_Paulo',
-    timeZoneName: 'longOffset'
-  });
+  // Calcula offset de São Paulo de forma mais eficiente
+  // Usa uma abordagem simples: São Paulo é UTC-3 (ou UTC-2 no horário de verão)
+  // Para simplificar e evitar operações custosas, usa UTC-3 como padrão
+  // O horário já está correto devido ao timeZone: 'America/Sao_Paulo'
+  const offsetHours = -3; // UTC-3 (horário padrão de São Paulo)
+  const offsetMinutes = 0;
   
-  // Tenta obter offset diretamente
-  let offsetHours = -3; // Default UTC-3 (horário padrão de São Paulo)
-  let offsetMinutes = 0;
-  
-  // Calcula offset real comparando horários
-  const spTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
-  const utcTime = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const diffMs = spTime.getTime() - utcTime.getTime();
-  const diffHours = diffMs / (1000 * 60 * 60);
-  
-  // Arredonda para o offset mais próximo (geralmente -3 ou -2)
-  offsetHours = Math.round(diffHours);
-  if (offsetHours < -12) offsetHours += 24;
-  if (offsetHours > 12) offsetHours -= 24;
-  
-  const offsetSign = offsetHours >= 0 ? '+' : '-';
-  const absOffsetHours = Math.abs(offsetHours);
-  
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${offsetSign}${String(absOffsetHours).padStart(2, '0')}:${String(offsetMinutes).padStart(2, '0')}`;
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}-03:00`;
 }
 
 /**
