@@ -440,7 +440,8 @@ app.get("/webhook/whatsapp", (req, res) => {
     });
     
     // Retorna erro como texto (Meta espera texto, não JSON)
-    return res.status(400).type('text').send('Invalid mode: hub.mode deve ser "subscribe"');
+    res.status(400).setHeader('Content-Type', 'text/plain');
+    return res.send('Invalid mode: hub.mode deve ser "subscribe"');
   }
   
   // Valida hub.verify_token
@@ -453,7 +454,8 @@ app.get("/webhook/whatsapp", (req, res) => {
     });
     
     // Retorna erro como texto (Meta espera texto, não JSON)
-    return res.status(403).type('text').send('Invalid verify token');
+    res.status(403).setHeader('Content-Type', 'text/plain');
+    return res.send('Invalid verify token');
   }
   
   // Valida hub.challenge
@@ -463,7 +465,8 @@ app.get("/webhook/whatsapp", (req, res) => {
     });
     
     // Retorna erro como texto (Meta espera texto, não JSON)
-    return res.status(400).type('text').send('Missing challenge');
+    res.status(400).setHeader('Content-Type', 'text/plain');
+    return res.send('Missing challenge');
   }
   
   // Validação bem-sucedida - retorna o challenge como texto puro
@@ -475,7 +478,8 @@ app.get("/webhook/whatsapp", (req, res) => {
   
   // IMPORTANTE: Retorna o challenge como texto puro (não JSON)
   // O Meta espera apenas o valor do challenge, sem formatação
-  res.status(200).type('text').send(String(challenge));
+  res.status(200).setHeader('Content-Type', 'text/plain');
+  res.send(String(challenge));
 });
 
 /**
