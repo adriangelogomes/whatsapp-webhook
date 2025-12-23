@@ -397,7 +397,89 @@ app.get("/health", (req, res) => {
 // Webhook WhatsApp
 // ============================
 /**
- * Endpoint principal do webhook
+ * Endpoint GET para validação do webhook do Meta/Facebook
+ * 
+ * Quando o Meta configura o webhook, ele envia uma requisição GET
+ * para validar a assinatura. Deve retornar o hub.challenge se válido.
+ * 
+ * Parâmetros esperados:
+ * - hub.mode: deve ser "subscribe"
+ * - hub.challenge: token que deve ser retornado
+ * - hub.verify_token: deve corresponder a WEBHOOK_SECRET
+ * 
+ * @route GET /webhook/whatsapp
+ * @param {string} req.query.hub.mode - Deve ser "subscribe"
+ * @param {string} req.query.hub.challenge - Token a ser retornado
+ * @param {string} req.query.hub.verify_token - Token de verificação
+ * @returns {string} 200 - hub.challenge se válido
+ * @returns {number} 403 - Token de verificação inválido
+ * @returns {number} 400 - Parâmetros inválidos
+ */
+app.get("/webhook/whatsapp", (req, res) => {
+  const mode = req.query['hub.mode'];
+  const challenge = req.query['hub.challenge'];
+  const verifyToken = req.query['hub.verify_token'];
+  
+  // Log da requisição de verificação
+  log("INFO", "Verificação de webhook do Meta recebida", {
+    ip: req.ip,
+    userAgent: req.get("user-agent"),
+    mode,
+    hasChallenge: !!challenge,
+    hasVerifyToken: !!verifyToken
+  });
+  
+  // Valida hub.mode
+  if (mode !== 'subscribe') {
+    log("WARN", "Verificação do Meta falhou - modo inválido", {
+      mode,
+      expected: "subscribe"
+    });
+    
+    return res.status(400).json({
+      error: "Invalid mode",
+      message: "hub.mode deve ser 'subscribe'"
+    });
+  }
+  
+  // Valida hub.verify_token
+  if (!verifyToken || verifyToken !== WEBHOOK_SECRET) {
+    log("WARN", "Verificação do Meta falhou - token inválido", {
+      ip: req.ip,
+      tokenLength: verifyToken?.length || 0,
+      tokenPrefix: verifyToken ? verifyToken.substring(0, 4) + "***" : "ausente"
+    });
+    
+    return res.status(403).json({
+      error: "Invalid verify token",
+      message: "hub.verify_token inválido"
+    });
+  }
+  
+  // Valida hub.challenge
+  if (!challenge) {
+    log("WARN", "Verificação do Meta falhou - challenge ausente", {
+      ip: req.ip
+    });
+    
+    return res.status(400).json({
+      error: "Missing challenge",
+      message: "hub.challenge é obrigatório"
+    });
+  }
+  
+  // Validação bem-sucedida - retorna o challenge
+  log("INFO", "Verificação do Meta bem-sucedida", {
+    ip: req.ip,
+    challengeLength: challenge.length
+  });
+  
+  // Retorna o challenge como texto plano (conforme especificação do Meta)
+  res.status(200).send(challenge);
+});
+
+/**
+ * Endpoint POST para receber eventos do WhatsApp
  * 
  * Recebe eventos do WhatsApp, valida autenticação, valida payload
  * e publica no RabbitMQ.

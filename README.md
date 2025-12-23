@@ -70,6 +70,38 @@ docker run -d \
 
 ## 📡 Endpoints
 
+### GET /webhook/whatsapp
+
+Validação do webhook do Meta/Facebook (verificação de assinatura).
+
+Quando o Meta configura o webhook, ele envia uma requisição GET para validar.
+Este endpoint valida a assinatura e retorna o `hub.challenge` se válido.
+
+**Query Parameters:**
+- `hub.mode` - Deve ser `"subscribe"`
+- `hub.challenge` - Token que será retornado se validação passar
+- `hub.verify_token` - Deve corresponder a `WEBHOOK_SECRET`
+
+**Response:**
+- `200` - Retorna `hub.challenge` como texto (validação bem-sucedida)
+- `400` - Parâmetros inválidos (hub.mode diferente de "subscribe" ou challenge ausente)
+- `403` - Token de verificação inválido (hub.verify_token não corresponde a WEBHOOK_SECRET)
+
+**Exemplo de requisição do Meta:**
+```
+GET /webhook/whatsapp?hub.mode=subscribe&hub.challenge=1234567890&hub.verify_token=super_secret_whatsapp_token_123
+```
+
+**Response (sucesso):**
+```
+1234567890
+```
+
+**Exemplo de teste manual:**
+```bash
+curl "https://whatsapp.api.sofiainsights.com.br/webhook/whatsapp?hub.mode=subscribe&hub.challenge=test123&hub.verify_token=super_secret_whatsapp_token_123"
+```
+
 ### POST /webhook/whatsapp
 
 Recebe eventos do WhatsApp e publica no RabbitMQ.
