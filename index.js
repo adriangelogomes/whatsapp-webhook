@@ -112,18 +112,61 @@ function logRequest(req, statusCode, responseTime = null) {
 }
 
 /**
- * Log de payload recebido (sanitizado para não expor dados sensíveis)
+ * Log completo de requisição HTTP (inclui todos os headers, query params, body, etc)
+ * 
+ * @param {Object} req - Request object do Express
+ * @param {string} requestId - ID único da requisição
+ * @param {string} message - Mensagem de log
  */
-function logPayload(payload, maxSize = 1000) {
+function logFullRequest(req, requestId, message = "Requisição completa recebida") {
+  try {
+    const clientIp = req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    
+    // Extrai token do header Authorization se existir
+    let authToken = null;
+    if (req.headers.authorization) {
+      const parts = req.headers.authorization.split(" ");
+      if (parts.length === 2 && parts[0] === "Bearer") {
+        authToken = parts[1];
+      }
+    }
+    
+    const logData = {
+      requestId,
+      method: req.method,
+      path: req.path,
+      url: req.url,
+      query: req.query,
+      queryString: req.url.split('?')[1] || '',
+      ip: clientIp,
+      headers: req.headers, // TODOS os headers completos
+      userAgent: req.get("user-agent"),
+      contentType: req.get("content-type"),
+      contentLength: req.get("content-length"),
+      authorization: req.headers.authorization || null, // Token completo no header Authorization
+      authToken: authToken, // Token extraído (sem "Bearer ")
+      body: req.body || null, // Body completo
+      webhookSecret: WEBHOOK_SECRET || null, // WEBHOOK_SECRET configurado (para comparação)
+      webhookSecretLength: WEBHOOK_SECRET?.length || 0
+    };
+    
+    log("INFO", message, logData);
+  } catch (err) {
+    log("WARN", "Erro ao logar requisição completa", { error: err.message });
+  }
+}
+
+/**
+ * Log de payload recebido (completo, sem truncamento)
+ */
+function logPayload(payload, maxSize = null) {
   try {
     const payloadStr = JSON.stringify(payload);
-    const truncated = payloadStr.length > maxSize 
-      ? payloadStr.substring(0, maxSize) + "..." 
-      : payloadStr;
     
     log("INFO", "Payload recebido", {
       payloadSize: payloadStr.length,
-      payloadPreview: truncated,
+      payload: payload, // Payload completo sem truncamento
+      payloadString: payloadStr, // String completa do payload
       payloadKeys: Object.keys(payload || {})
     });
   } catch (err) {
@@ -312,12 +355,20 @@ app.use((req, res, next) => {
  * @returns {void}
  */
 function validateWebhookSecret(req, res, next) {
+  const requestId = `auth_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
+  // Log completo da requisição antes da validação
+  logFullRequest(req, requestId, "Middleware de autenticação - Requisição recebida");
+  
   // Se WEBHOOK_SECRET não estiver configurado, permite requisições sem autenticação
   if (!WEBHOOK_SECRET) {
     log("INFO", "Requisição aceita sem autenticação (WEBHOOK_SECRET não configurado)", {
+      requestId,
       ip: req.ip,
       path: req.path,
-      userAgent: req.get("user-agent")
+      userAgent: req.get("user-agent"),
+      hasAuthorizationHeader: !!req.headers.authorization,
+      authorizationHeader: req.headers.authorization || null
     });
     
     return next();
@@ -328,9 +379,13 @@ function validateWebhookSecret(req, res, next) {
   // Verifica se header existe
   if (!authHeader) {
     log("WARN", "Requisição sem token de autenticação", {
+      requestId,
       ip: req.ip,
       path: req.path,
-      userAgent: req.get("user-agent")
+      userAgent: req.get("user-agent"),
+      headers: req.headers,
+      webhookSecret: WEBHOOK_SECRET,
+      webhookSecretLength: WEBHOOK_SECRET?.length || 0
     });
     
     return res.status(401).json({
@@ -343,10 +398,15 @@ function validateWebhookSecret(req, res, next) {
   const parts = authHeader.split(" ");
   if (parts.length !== 2 || parts[0] !== "Bearer") {
     log("WARN", "Formato de token inválido", {
+      requestId,
       ip: req.ip,
       path: req.path,
+      authHeader: authHeader, // Header completo
       authHeaderFormat: parts[0],
-      userAgent: req.get("user-agent")
+      authHeaderParts: parts,
+      userAgent: req.get("user-agent"),
+      webhookSecret: WEBHOOK_SECRET,
+      webhookSecretLength: WEBHOOK_SECRET?.length || 0
     });
     
     return res.status(401).json({
@@ -360,11 +420,17 @@ function validateWebhookSecret(req, res, next) {
   // Valida token
   if (token !== WEBHOOK_SECRET) {
     log("WARN", "Token inválido recebido", {
+      requestId,
       ip: req.ip,
       path: req.path,
+      tokenReceived: token, // Token completo recebido (sem mascarar)
       tokenLength: token.length,
-      tokenPrefix: token.substring(0, 4) + "***", // Primeiros 4 chars apenas
-      userAgent: req.get("user-agent")
+      webhookSecretExpected: WEBHOOK_SECRET, // Token esperado completo
+      webhookSecretLength: WEBHOOK_SECRET?.length || 0,
+      tokensMatch: token === WEBHOOK_SECRET,
+      tokensEqual: token === WEBHOOK_SECRET,
+      userAgent: req.get("user-agent"),
+      authorizationHeader: authHeader
     });
     
     return res.status(401).json({
@@ -375,8 +441,12 @@ function validateWebhookSecret(req, res, next) {
 
   // Token válido, continua
   log("INFO", "Autenticação válida", {
+    requestId,
     ip: req.ip,
-    path: req.path
+    path: req.path,
+    tokenLength: token.length,
+    webhookSecretLength: WEBHOOK_SECRET?.length || 0,
+    tokensMatch: true
   });
   
   next();
@@ -451,33 +521,22 @@ app.get("/webhook/whatsapp", (req, res) => {
   // IP real (considera proxies)
   const clientIp = req.ip || req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
   
-  // Log completo da requisição recebida
-  log("INFO", "GET /webhook/whatsapp - Requisição de verificação do Meta recebida", {
+  // Log completo da requisição recebida (TODAS as informações)
+  logFullRequest(req, requestId, "GET /webhook/whatsapp - Requisição de verificação do Meta recebida");
+  
+  // Log adicional com parâmetros extraídos e comparações
+  log("INFO", "GET /webhook/whatsapp - Parâmetros extraídos", {
     requestId,
-    method: req.method,
-    path: req.path,
-    url: req.url,
-    query: req.query,
-    ip: clientIp,
-    userAgent: req.get("user-agent"),
-    headers: {
-      host: req.headers.host,
-      'user-agent': req.get("user-agent"),
-      'x-forwarded-for': req.headers['x-forwarded-for'],
-      'x-real-ip': req.headers['x-real-ip']
-    },
-    params: {
-      mode,
-      hasChallenge: !!challenge,
-      challengeLength: challenge?.length || 0,
-      challenge: challenge, // Loga o challenge completo
-      hasVerifyToken: !!verifyToken,
-      verifyTokenLength: verifyToken?.length || 0,
-      verifyTokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
-      expectedTokenLength: WEBHOOK_SECRET?.length || 0
-    },
-    queryParams: Object.keys(req.query),
-    queryString: req.url.split('?')[1] || ''
+    mode: mode,
+    modeValue: mode,
+    challenge: challenge, // Challenge completo
+    challengeLength: challenge?.length || 0,
+    verifyToken: verifyToken, // Token completo (sem mascarar)
+    verifyTokenLength: verifyToken?.length || 0,
+    webhookSecret: WEBHOOK_SECRET, // WEBHOOK_SECRET completo (para comparação)
+    webhookSecretLength: WEBHOOK_SECRET?.length || 0,
+    tokensMatch: WEBHOOK_SECRET ? (verifyToken === WEBHOOK_SECRET) : null,
+    hasWebhookSecret: !!WEBHOOK_SECRET
   });
   
   // Valida hub.mode
@@ -508,12 +567,12 @@ app.get("/webhook/whatsapp", (req, res) => {
       log("WARN", "GET /webhook/whatsapp - Verificação falhou: token inválido", {
         requestId,
         ip: clientIp,
-        tokenLength: verifyToken?.length || 0,
-        tokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
-        expectedLength: WEBHOOK_SECRET?.length || 0,
+        verifyTokenReceived: verifyToken, // Token completo recebido
+        verifyTokenLength: verifyToken?.length || 0,
+        webhookSecretExpected: WEBHOOK_SECRET, // Token esperado completo
+        webhookSecretLength: WEBHOOK_SECRET?.length || 0,
         tokensMatch: false,
-        verifyTokenReceived: verifyToken || "ausente",
-        webhookSecretPrefix: WEBHOOK_SECRET ? WEBHOOK_SECRET.substring(0, 8) + "***" : "ausente",
+        tokensEqual: verifyToken === WEBHOOK_SECRET,
         processingTime: `${processingTime}ms`,
         responseStatus: 403
       });
@@ -528,7 +587,9 @@ app.get("/webhook/whatsapp", (req, res) => {
     log("INFO", "GET /webhook/whatsapp - Validação de token ignorada (WEBHOOK_SECRET não configurado)", {
       requestId,
       ip: clientIp,
-      hasVerifyToken: !!verifyToken
+      hasVerifyToken: !!verifyToken,
+      verifyToken: verifyToken, // Token completo recebido
+      verifyTokenLength: verifyToken?.length || 0
     });
   }
   
@@ -597,17 +658,11 @@ app.post("/webhook/whatsapp", validateWebhookSecret, async (req, res) => {
   const startTime = Date.now();
   
   try {
-    // Log da requisição recebida
-    log("INFO", "Webhook recebido", {
-      requestId,
-      ip: req.ip,
-      userAgent: req.get("user-agent"),
-      contentType: req.get("content-type"),
-      contentLength: req.get("content-length")
-    });
+    // Log completo da requisição recebida (TODAS as informações)
+    logFullRequest(req, requestId, "POST /webhook/whatsapp - Webhook recebido");
     
-    // Log do payload recebido
-    logPayload(req.body, 2000); // Loga até 2000 caracteres do payload
+    // Log do payload recebido (completo, sem truncamento)
+    logPayload(req.body);
     
     // Valida se RabbitMQ está conectado
     if (!channel) {
@@ -629,8 +684,10 @@ app.post("/webhook/whatsapp", validateWebhookSecret, async (req, res) => {
       log("WARN", "Payload inválido recebido", {
         requestId,
         payloadType: typeof payload,
-        payloadValue: payload,
-        payloadString: JSON.stringify(payload).substring(0, 200)
+        payloadValue: payload, // Payload completo
+        payloadString: JSON.stringify(payload), // String completa
+        rawBody: req.body,
+        headers: req.headers
       });
       
       return res.status(400).json({ 
