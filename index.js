@@ -163,9 +163,11 @@ if (!RABBIT_URL) {
   process.exit(1);
 }
 
-if (!WEBHOOK_SECRET) {
-  console.error("❌ WEBHOOK_SECRET é obrigatória");
-  process.exit(1);
+// WEBHOOK_SECRET é opcional - se não estiver definido, requisições serão aceitas sem autenticação
+if (WEBHOOK_SECRET) {
+  console.log("✅ WEBHOOK_SECRET configurado - autenticação ativada");
+} else {
+  console.log("⚠️  WEBHOOK_SECRET não configurado - requisições serão aceitas sem autenticação");
 }
 
 // ============================
@@ -297,7 +299,10 @@ app.use((req, res, next) => {
 // Middleware de autenticação
 // ============================
 /**
- * Valida Bearer Token no header Authorization
+ * Valida Bearer Token no header Authorization (opcional)
+ * 
+ * Se WEBHOOK_SECRET estiver configurado, valida o token.
+ * Se não estiver configurado, permite requisições sem autenticação.
  * 
  * Formato esperado: Authorization: Bearer SEU_TOKEN
  * 
@@ -307,6 +312,17 @@ app.use((req, res, next) => {
  * @returns {void}
  */
 function validateWebhookSecret(req, res, next) {
+  // Se WEBHOOK_SECRET não estiver configurado, permite requisições sem autenticação
+  if (!WEBHOOK_SECRET) {
+    log("INFO", "Requisição aceita sem autenticação (WEBHOOK_SECRET não configurado)", {
+      ip: req.ip,
+      path: req.path,
+      userAgent: req.get("user-agent")
+    });
+    
+    return next();
+  }
+
   const authHeader = req.headers.authorization;
 
   // Verifica se header existe
@@ -411,14 +427,14 @@ app.get("/health", (req, res) => {
  * Parâmetros esperados:
  * - hub.mode: deve ser "subscribe"
  * - hub.challenge: token que deve ser retornado
- * - hub.verify_token: deve corresponder a WEBHOOK_SECRET
+ * - hub.verify_token: deve corresponder a WEBHOOK_SECRET (se configurado)
  * 
  * @route GET /webhook/whatsapp
  * @param {string} req.query.hub.mode - Deve ser "subscribe"
  * @param {string} req.query.hub.challenge - Token a ser retornado
- * @param {string} req.query.hub.verify_token - Token de verificação
+ * @param {string} req.query.hub.verify_token - Token de verificação (opcional se WEBHOOK_SECRET não estiver configurado)
  * @returns {string} 200 - hub.challenge se válido
- * @returns {number} 403 - Token de verificação inválido
+ * @returns {number} 403 - Token de verificação inválido (apenas se WEBHOOK_SECRET configurado)
  * @returns {number} 400 - Parâmetros inválidos
  */
 // Endpoint GET para validação do Meta - DEVE estar ANTES do middleware de logging
@@ -483,28 +499,37 @@ app.get("/webhook/whatsapp", (req, res) => {
     return res.end('Invalid mode');
   }
   
-  // Valida hub.verify_token - comparação exata e case-sensitive
-  const tokenMatch = verifyToken && verifyToken === WEBHOOK_SECRET;
-  
-  if (!tokenMatch) {
-    const processingTime = Date.now() - startTime;
-    log("WARN", "GET /webhook/whatsapp - Verificação falhou: token inválido", {
+  // Valida hub.verify_token apenas se WEBHOOK_SECRET estiver configurado
+  if (WEBHOOK_SECRET) {
+    const tokenMatch = verifyToken && verifyToken === WEBHOOK_SECRET;
+    
+    if (!tokenMatch) {
+      const processingTime = Date.now() - startTime;
+      log("WARN", "GET /webhook/whatsapp - Verificação falhou: token inválido", {
+        requestId,
+        ip: clientIp,
+        tokenLength: verifyToken?.length || 0,
+        tokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
+        expectedLength: WEBHOOK_SECRET?.length || 0,
+        tokensMatch: false,
+        verifyTokenReceived: verifyToken || "ausente",
+        webhookSecretPrefix: WEBHOOK_SECRET ? WEBHOOK_SECRET.substring(0, 8) + "***" : "ausente",
+        processingTime: `${processingTime}ms`,
+        responseStatus: 403
+      });
+      
+      // Meta espera resposta simples em caso de erro
+      res.status(403);
+      res.setHeader('Content-Type', 'text/plain');
+      return res.end('Invalid verify token');
+    }
+  } else {
+    // WEBHOOK_SECRET não configurado - aceita qualquer token ou requisição sem token
+    log("INFO", "GET /webhook/whatsapp - Validação de token ignorada (WEBHOOK_SECRET não configurado)", {
       requestId,
       ip: clientIp,
-      tokenLength: verifyToken?.length || 0,
-      tokenPrefix: verifyToken ? verifyToken.substring(0, 8) + "***" : "ausente",
-      expectedLength: WEBHOOK_SECRET?.length || 0,
-      tokensMatch: false,
-      verifyTokenReceived: verifyToken || "ausente",
-      webhookSecretPrefix: WEBHOOK_SECRET ? WEBHOOK_SECRET.substring(0, 8) + "***" : "ausente",
-      processingTime: `${processingTime}ms`,
-      responseStatus: 403
+      hasVerifyToken: !!verifyToken
     });
-    
-    // Meta espera resposta simples em caso de erro
-    res.status(403);
-    res.setHeader('Content-Type', 'text/plain');
-    return res.end('Invalid verify token');
   }
   
   // Valida hub.challenge
@@ -554,15 +579,15 @@ app.get("/webhook/whatsapp", (req, res) => {
  * e publica no RabbitMQ.
  * 
  * Segurança:
- * - Requer Bearer Token no header Authorization
- * - Token validado via variável WEBHOOK_SECRET
- * - Não publica nada se token inválido
+ * - Se WEBHOOK_SECRET configurado: requer Bearer Token no header Authorization
+ * - Se WEBHOOK_SECRET não configurado: aceita requisições sem autenticação
+ * - Token validado via variável WEBHOOK_SECRET (quando configurado)
  * 
  * @route POST /webhook/whatsapp
- * @header Authorization: Bearer WEBHOOK_SECRET
+ * @header Authorization: Bearer WEBHOOK_SECRET (opcional, apenas se WEBHOOK_SECRET configurado)
  * @param {Object} req.body - Payload do evento WhatsApp
  * @returns {number} 200 - Evento enfileirado com sucesso
- * @returns {number} 401 - Token inválido ou ausente
+ * @returns {number} 401 - Token inválido ou ausente (apenas se WEBHOOK_SECRET configurado)
  * @returns {number} 400 - Payload inválido
  * @returns {number} 503 - RabbitMQ indisponível
  * @returns {number} 500 - Erro interno

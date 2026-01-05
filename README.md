@@ -33,7 +33,7 @@ npm install
 |----------|-----------|-------------|--------|
 | `PORT` | Porta do servidor HTTP | Não | `3000` |
 | `RABBIT_URL` | URL de conexão RabbitMQ | **Sim** | - |
-| `WEBHOOK_SECRET` | Token secreto para autenticação | **Sim** | - |
+| `WEBHOOK_SECRET` | Token secreto para autenticação | **Não** | - |
 | `RABBIT_EXCHANGE` | Nome do exchange | Não | `whatsapp.events` |
 | `RABBIT_QUEUE` | Nome da queue | Não | `whatsapp.incoming` |
 | `RABBIT_ROUTING_KEY` | Routing key | Não | `whatsapp.incoming` |
@@ -46,6 +46,8 @@ WEBHOOK_SECRET=super_secret_whatsapp_token_123
 ```
 
 > ⚠️ **Importante**: `WEBHOOK_SECRET` nunca deve ser versionado no código. Use apenas variáveis de ambiente.
+> 
+> ⚠️ **Segurança**: Se `WEBHOOK_SECRET` não estiver configurado, o webhook aceitará requisições sem autenticação. Para produção, é altamente recomendado configurar um token secreto.
 
 ## 🐳 Docker
 
@@ -80,12 +82,12 @@ Este endpoint valida a assinatura e retorna o `hub.challenge` se válido.
 **Query Parameters:**
 - `hub.mode` - Deve ser `"subscribe"`
 - `hub.challenge` - Token que será retornado se validação passar
-- `hub.verify_token` - Deve corresponder a `WEBHOOK_SECRET`
+- `hub.verify_token` - Deve corresponder a `WEBHOOK_SECRET` (apenas se `WEBHOOK_SECRET` estiver configurado)
 
 **Response:**
 - `200` - Retorna `hub.challenge` como texto (validação bem-sucedida)
 - `400` - Parâmetros inválidos (hub.mode diferente de "subscribe" ou challenge ausente)
-- `403` - Token de verificação inválido (hub.verify_token não corresponde a WEBHOOK_SECRET)
+- `403` - Token de verificação inválido (apenas se `WEBHOOK_SECRET` estiver configurado e hub.verify_token não corresponder)
 
 **Exemplo de requisição do Meta:**
 ```
@@ -106,14 +108,13 @@ curl "https://whatsapp.api.sofiainsights.com.br/webhook/whatsapp?hub.mode=subscr
 
 Recebe eventos do WhatsApp e publica no RabbitMQ.
 
-**Autenticação obrigatória:**
-```
-Authorization: Bearer WEBHOOK_SECRET
-```
+**Autenticação (opcional):**
+- Se `WEBHOOK_SECRET` estiver configurado, a autenticação é obrigatória
+- Se `WEBHOOK_SECRET` não estiver configurado, aceita requisições sem autenticação
 
 **Request Headers:**
 ```
-Authorization: Bearer super_secret_whatsapp_token_123
+Authorization: Bearer super_secret_whatsapp_token_123  (opcional, apenas se WEBHOOK_SECRET configurado)
 Content-Type: application/json
 ```
 
@@ -127,7 +128,7 @@ Content-Type: application/json
 
 **Response:**
 - `200` - Evento enfileirado com sucesso
-- `401` - Token inválido ou ausente (não publica nada)
+- `401` - Token inválido ou ausente (apenas se `WEBHOOK_SECRET` configurado, não publica nada)
 - `400` - Payload inválido
 - `503` - RabbitMQ indisponível
 - `500` - Erro interno

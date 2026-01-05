@@ -52,23 +52,23 @@ RABBIT_ROUTING_KEY=whatsapp.incoming
 
 ## 🧪 Testes
 
-- [ ] **Autenticação** funciona (Bearer Token válido → 200, inválido → 401)
-- [ ] **Webhook recebe** eventos do WhatsApp com token válido
-- [ ] **Mensagens publicadas** no RabbitMQ apenas com token válido
-- [ ] **Token inválido** não publica nada (retorna 401)
+- [ ] **Autenticação** funciona (se `WEBHOOK_SECRET` configurado: Bearer Token válido → 200, inválido → 401)
+- [ ] **Webhook recebe** eventos do WhatsApp (com token válido se `WEBHOOK_SECRET` configurado, ou sem token se não configurado)
+- [ ] **Mensagens publicadas** no RabbitMQ (apenas com token válido se `WEBHOOK_SECRET` configurado)
+- [ ] **Token inválido** não publica nada quando `WEBHOOK_SECRET` configurado (retorna 401)
 - [ ] **Reconexão automática** funciona após queda do RabbitMQ
 - [ ] **Healthcheck** retorna status correto
 - [ ] **Múltiplas instâncias** funcionam em paralelo
 
 ## 🔒 Segurança
 
-- [ ] **WEBHOOK_SECRET** configurado (token secreto para autenticação)
-- [ ] **Bearer Token** validado em todas as requisições
+- [ ] **WEBHOOK_SECRET** configurado (recomendado para produção - token secreto para autenticação)
+- [ ] **Bearer Token** validado em todas as requisições (apenas se `WEBHOOK_SECRET` configurado)
 - [ ] **Credenciais** em variáveis de ambiente (não hardcoded)
 - [ ] **Validação de payload** ativa
 - [ ] **Rate limiting** (se necessário via Cloudflare)
 - [ ] **HTTPS** obrigatório
-- [ ] **401 Unauthorized** retornado para tokens inválidos (não publica nada)
+- [ ] **401 Unauthorized** retornado para tokens inválidos quando `WEBHOOK_SECRET` configurado (não publica nada)
 
 ## 📝 Fluxo Final
 
