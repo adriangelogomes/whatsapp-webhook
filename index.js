@@ -237,8 +237,8 @@ function validateHubSignature(signature, body, secret) {
 // ============================
 const PORT = process.env.PORT || 3000;
 const RABBIT_URL = process.env.RABBIT_URL;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
-const APP_SECRET = process.env.APP_SECRET || WEBHOOK_SECRET; // Usa WEBHOOK_SECRET como fallback
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET; // Apenas para GET /webhook/whatsapp (hub.verify_token)
+const APP_SECRET = process.env.APP_SECRET; // Apenas para POST /webhook/whatsapp (x-hub-signature-256)
 
 const EXCHANGE = process.env.RABBIT_EXCHANGE || "whatsapp.events";
 const QUEUE = process.env.RABBIT_QUEUE || "whatsapp.incoming";
@@ -701,24 +701,24 @@ app.get("/webhook/whatsapp", (req, res) => {
 /**
  * Endpoint POST para receber eventos do WhatsApp
  * 
- * Recebe eventos do WhatsApp, valida autenticação, valida payload
+ * Recebe eventos do WhatsApp, valida assinatura x-hub-signature-256, valida payload
  * e publica no RabbitMQ.
  * 
  * Segurança:
- * - Se WEBHOOK_SECRET configurado: requer Bearer Token no header Authorization
- * - Se WEBHOOK_SECRET não configurado: aceita requisições sem autenticação
- * - Token validado via variável WEBHOOK_SECRET (quando configurado)
+ * - Valida assinatura x-hub-signature-256 se APP_SECRET configurado
+ * - APP_SECRET: Chave Secreta do Aplicativo (App Secret) do Meta for Developers
+ * - Se APP_SECRET não configurado: validação de assinatura é ignorada
  * 
  * @route POST /webhook/whatsapp
- * @header Authorization: Bearer WEBHOOK_SECRET (opcional, apenas se WEBHOOK_SECRET configurado)
+ * @header x-hub-signature-256: sha256=<hash> (assinatura HMAC-SHA256 do body)
  * @param {Object} req.body - Payload do evento WhatsApp
  * @returns {number} 200 - Evento enfileirado com sucesso
- * @returns {number} 401 - Token inválido ou ausente (apenas se WEBHOOK_SECRET configurado)
+ * @returns {number} 401 - Assinatura inválida ou ausente (apenas se APP_SECRET configurado)
  * @returns {number} 400 - Payload inválido
  * @returns {number} 503 - RabbitMQ indisponível
  * @returns {number} 500 - Erro interno
  */
-app.post("/webhook/whatsapp", validateWebhookSecret, async (req, res) => {
+app.post("/webhook/whatsapp", async (req, res) => {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const startTime = Date.now();
   
