@@ -15,6 +15,8 @@
 import express from "express";
 import amqp from "amqplib";
 import crypto from "crypto";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 const app = express();
 
@@ -157,17 +159,24 @@ function logFullRequest(req, requestId, message = "Requisição completa recebid
 }
 
 /**
- * Log de payload recebido (completo, sem truncamento)
+ * Log de payload recebido (sanitizado em produção)
  */
 function logPayload(payload, maxSize = null) {
   try {
-    const payloadStr = JSON.stringify(payload);
+    // Sanitização baseada em LOG_LEVEL e LOG_SANITIZE_ENABLED
+    let payloadToLog = payload;
+    if (LOG_LEVEL === 'production' || LOG_SANITIZE_ENABLED) {
+      payloadToLog = sanitizeBody(payload);
+    }
+    
+    const payloadStr = JSON.stringify(payloadToLog);
     
     log("INFO", "Payload recebido", {
-      payloadSize: payloadStr.length,
-      payload: payload, // Payload completo sem truncamento
-      payloadString: payloadStr, // String completa do payload
-      payloadKeys: Object.keys(payload || {})
+      payloadSize: JSON.stringify(payload).length, // Tamanho original
+      payload: payloadToLog, // Payload sanitizado ou completo (dependendo do modo)
+      payloadString: payloadStr, // String do payload sanitizado ou completo
+      payloadKeys: Object.keys(payload || {}),
+      sanitized: LOG_LEVEL === 'production' || LOG_SANITIZE_ENABLED
     });
   } catch (err) {
     log("WARN", "Erro ao logar payload", { error: err.message });
@@ -187,6 +196,172 @@ function logError(error, context = {}) {
     },
     ...context
   });
+}
+
+/**
+ * Mascara token/secrets para logs (mostra apenas últimos 4 caracteres)
+ * 
+ * @param {string} token - Token a ser mascarado
+ * @returns {string} - Token mascarado
+ */
+function maskToken(token) {
+  if (!token || typeof token !== 'string') return '***';
+  if (token.length < 8) return '***';
+  const last4 = token.slice(-4);
+  return '*'.repeat(token.length - 4) + last4;
+}
+
+/**
+ * Sanitiza body do WhatsApp para logs (remove/trunca dados sensíveis)
+ * 
+ * @param {any} body - Body a ser sanitizado
+ * @returns {any} - Body sanitizado
+ */
+function sanitizeBody(body) {
+  if (!body || typeof body !== 'object') return body;
+  
+  try {
+    const sanitized = JSON.parse(JSON.stringify(body)); // Deep clone
+    
+    // Sanitiza entry[].changes[].value.messages[].text.body
+    if (sanitized.entry && Array.isArray(sanitized.entry)) {
+      sanitized.entry.forEach(entry => {
+        if (entry.changes && Array.isArray(entry.changes)) {
+          entry.changes.forEach(change => {
+            if (change.value && change.value.messages && Array.isArray(change.value.messages)) {
+              change.value.messages.forEach(msg => {
+                if (msg.text && msg.text.body) {
+                  const bodyText = msg.text.body;
+                  if (bodyText.length > 50) {
+                    msg.text.body = bodyText.substring(0, 50) + '... [TRUNCATED]';
+                  }
+                }
+              });
+            }
+            
+            // Sanitiza contacts[].wa_id
+            if (change.value && change.value.contacts && Array.isArray(change.value.contacts)) {
+              change.value.contacts.forEach(contact => {
+                if (contact.wa_id) {
+                  contact.wa_id = maskToken(contact.wa_id);
+                }
+              });
+            }
+            
+            // Sanitiza metadata
+            if (change.value && change.value.metadata) {
+              if (change.value.metadata.phone_number_id) {
+                change.value.metadata.phone_number_id = maskToken(String(change.value.metadata.phone_number_id));
+              }
+              if (change.value.metadata.display_phone_number) {
+                change.value.metadata.display_phone_number = maskToken(change.value.metadata.display_phone_number);
+              }
+            }
+          });
+        }
+      });
+    }
+    
+    return sanitized;
+  } catch (err) {
+    return body; // Retorna original se erro
+  }
+}
+
+/**
+ * Valida se IP está em range CIDR (simplificado para IPv4 e IPv6)
+ * 
+ * @param {string} ip - IP a validar
+ * @param {string} cidr - Range CIDR (ex: "192.168.1.0/24" ou "2a03:2880::/32")
+ * @returns {boolean} - true se IP está no range
+ */
+function isIPInCIDR(ip, cidr) {
+  try {
+    const [range, bits] = cidr.split('/');
+    const maskBits = parseInt(bits, 10);
+    
+    // IPv4
+    if (ip.includes('.') && range.includes('.')) {
+      const ipParts = ip.split('.').map(Number);
+      const rangeParts = range.split('.').map(Number);
+      const mask = ~(Math.pow(2, 32 - maskBits) - 1) >>> 0;
+      const ipNum = (ipParts[0] << 24) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
+      const rangeNum = (rangeParts[0] << 24) + (rangeParts[1] << 16) + (rangeParts[2] << 8) + rangeParts[3];
+      return (ipNum & mask) === (rangeNum & mask);
+    }
+    
+    // IPv6 (validação simplificada de prefixo)
+    if (ip.includes(':') && range.includes(':')) {
+      // Normaliza IPv6 (expande zeros)
+      const normalizeIPv6 = (addr) => {
+        const parts = addr.split('::');
+        if (parts.length === 2) {
+          const left = parts[0].split(':').filter(x => x);
+          const right = parts[1].split(':').filter(x => x);
+          const zeros = 8 - left.length - right.length;
+          return [...left, ...Array(zeros).fill('0'), ...right].join(':');
+        }
+        return addr;
+      };
+      
+      const ipNormalized = normalizeIPv6(ip);
+      const rangeNormalized = normalizeIPv6(range);
+      const ipPrefix = ipNormalized.split(':').slice(0, Math.floor(maskBits / 16)).join(':');
+      const rangePrefix = rangeNormalized.split(':').slice(0, Math.floor(maskBits / 16)).join(':');
+      return ipPrefix === rangePrefix;
+    }
+    
+    return false;
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * Extrai IP real da requisição (considera proxies como Cloudflare)
+ * 
+ * @param {Object} req - Request object do Express
+ * @returns {string} - IP real do cliente
+ */
+function getClientIP(req) {
+  return req.headers['cf-connecting-ip'] || // Cloudflare
+         req.headers['x-real-ip'] || // Nginx
+         req.headers['x-forwarded-for']?.split(',')[0]?.trim() || // Proxy genérico (primeiro IP)
+         req.ip || // Express
+         req.connection.remoteAddress || // Fallback
+         'unknown';
+}
+
+/**
+ * Valida se IP está na whitelist do Meta/Facebook
+ * 
+ * @param {string} ip - IP a validar
+ * @returns {boolean} - true se IP está na whitelist
+ */
+function isValidMetaIP(ip) {
+  if (!ip) return false;
+  
+  // Ranges conhecidos do Meta/Facebook
+  const META_IP_RANGES = [
+    // IPv6
+    '2a03:2880::/32',
+    '2620:0:1c00::/40',
+    // IPv4
+    '31.13.24.0/21',
+    '31.13.64.0/18',
+    '66.220.144.0/20',
+    '69.63.176.0/20',
+    '69.171.224.0/19',
+    '74.119.76.0/22',
+    '103.4.96.0/22',
+    '157.240.0.0/16',
+    '173.252.64.0/18',
+    '179.60.192.0/22',
+    '185.60.216.0/22',
+    '204.15.20.0/22'
+  ];
+  
+  return META_IP_RANGES.some(range => isIPInCIDR(ip, range));
 }
 
 /**
@@ -243,6 +418,19 @@ const APP_SECRET = process.env.APP_SECRET; // Apenas para POST /webhook/whatsapp
 const EXCHANGE = process.env.RABBIT_EXCHANGE || "whatsapp.events";
 const QUEUE = process.env.RABBIT_QUEUE || "whatsapp.incoming";
 const ROUTING_KEY = process.env.RABBIT_ROUTING_KEY || "whatsapp.incoming";
+
+// Variáveis de segurança
+const NODE_ENV = process.env.NODE_ENV || "production"; // production ou development
+const IS_PRODUCTION = NODE_ENV === "production";
+const LOG_LEVEL = process.env.LOG_LEVEL || (IS_PRODUCTION ? "production" : "debug"); // production ou debug
+const LOG_SANITIZE_ENABLED = process.env.LOG_SANITIZE_ENABLED !== "false"; // true por padrão
+const RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED !== "false"; // true por padrão
+const RATE_LIMIT_GET_MAX = parseInt(process.env.RATE_LIMIT_GET_MAX || "10", 10);
+const RATE_LIMIT_GET_WINDOW_MS = parseInt(process.env.RATE_LIMIT_GET_WINDOW_MS || "900000", 10); // 15 minutos
+const RATE_LIMIT_POST_MAX = parseInt(process.env.RATE_LIMIT_POST_MAX || "100", 10);
+const RATE_LIMIT_POST_WINDOW_MS = parseInt(process.env.RATE_LIMIT_POST_WINDOW_MS || "60000", 10); // 1 minuto
+const META_IP_VALIDATION_MODE = process.env.META_IP_VALIDATION_MODE || "monitor"; // monitor, block, disabled
+const META_USER_AGENT = "facebookexternalua"; // User-Agent esperado do Meta
 
 // Validação de variáveis obrigatórias
 if (!RABBIT_URL) {
@@ -355,6 +543,82 @@ async function connectRabbit() {
 
 // Inicia conexão
 connectRabbit();
+
+// ============================
+// Headers de Segurança HTTP (Helmet)
+// ============================
+app.use(helmet({
+  contentSecurityPolicy: false, // Desabilitado (não há HTML)
+  hidePoweredBy: true, // Remove X-Powered-By: Express
+  hsts: {
+    maxAge: 31536000, // 1 ano
+    includeSubDomains: true,
+    preload: true
+  },
+  frameguard: {
+    action: 'deny' // X-Frame-Options: DENY
+  },
+  noSniff: true, // X-Content-Type-Options: nosniff
+  xssFilter: false // Desabilitado (obsoleto)
+}));
+
+// ============================
+// Rate Limiting
+// ============================
+if (RATE_LIMIT_ENABLED) {
+  // Rate limiter para GET /webhook/whatsapp
+  const getWebhookLimiter = rateLimit({
+    windowMs: RATE_LIMIT_GET_WINDOW_MS,
+    max: RATE_LIMIT_GET_MAX,
+    message: {
+      error: "Too Many Requests",
+      message: "Muitas requisições deste IP, tente novamente mais tarde."
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+      // Pula rate limiting se não for GET /webhook/whatsapp
+      return !(req.method === 'GET' && req.path === '/webhook/whatsapp');
+    }
+  });
+
+  // Rate limiter para POST /webhook/whatsapp
+  const postWebhookLimiter = rateLimit({
+    windowMs: RATE_LIMIT_POST_WINDOW_MS,
+    max: RATE_LIMIT_POST_MAX,
+    message: {
+      error: "Too Many Requests",
+      message: "Muitas requisições deste IP, tente novamente mais tarde."
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+      // Pula rate limiting se não for POST /webhook/whatsapp
+      return !(req.method === 'POST' && req.path === '/webhook/whatsapp');
+    }
+  });
+
+  // Rate limiter genérico para outras rotas
+  const generalLimiter = rateLimit({
+    windowMs: 60000, // 1 minuto
+    max: 60, // 60 requisições por minuto
+    message: {
+      error: "Too Many Requests",
+      message: "Muitas requisições deste IP, tente novamente mais tarde."
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+      // Pula rate limiting para rotas de webhook (já tem limiters específicos)
+      return (req.method === 'GET' && req.path === '/webhook/whatsapp') ||
+             (req.method === 'POST' && req.path === '/webhook/whatsapp');
+    }
+  });
+
+  app.use(getWebhookLimiter);
+  app.use(postWebhookLimiter);
+  app.use(generalLimiter);
+}
 
 // Middleware JSON padrão (para todas as rotas exceto POST /webhook/whatsapp)
 app.use((req, res, next) => {
@@ -723,54 +987,89 @@ app.post("/webhook/whatsapp", async (req, res) => {
   const startTime = Date.now();
   
   try {
-    // Valida assinatura x-hub-signature-256 se APP_SECRET estiver configurado
-    if (APP_SECRET) {
-      const signature = req.headers['x-hub-signature-256'];
-      
-      if (!signature) {
-        log("WARN", "POST /webhook/whatsapp - Header x-hub-signature-256 ausente", {
-          requestId,
-          ip: req.ip,
-          headers: req.headers
-        });
-        
-        return res.status(401).json({
-          error: "Unauthorized",
-          message: "Assinatura x-hub-signature-256 não fornecida"
-        });
-      }
-      
-      // Valida assinatura usando o raw body
+    const clientIp = getClientIP(req);
+    const userAgent = req.get("user-agent");
+    const signature = req.headers['x-hub-signature-256'];
+    
+    // ============================================
+    // VALIDAÇÃO AGRESSIVA: Assinatura OU User-Agent
+    // ============================================
+    // Bloqueia se não tiver assinatura válida E não tiver User-Agent correto
+    
+    let hasValidSignature = false;
+    let hasValidUserAgent = userAgent === META_USER_AGENT;
+    
+    // Valida assinatura se APP_SECRET configurado
+    if (APP_SECRET && signature) {
       const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
-      const isValid = validateHubSignature(signature, rawBody, APP_SECRET);
+      hasValidSignature = validateHubSignature(signature, rawBody, APP_SECRET);
+    }
+    
+    // VALIDAÇÃO AGRESSIVA: Se não tem assinatura válida E não tem User-Agent → BLOQUEIA
+    if (!hasValidSignature && !hasValidUserAgent) {
+      log("WARN", "POST /webhook/whatsapp - Requisição bloqueada: sem assinatura válida e sem User-Agent correto", {
+        requestId,
+        ip: clientIp,
+        userAgent: userAgent || "ausente",
+        expectedUserAgent: META_USER_AGENT,
+        hasSignature: !!signature,
+        hasValidSignature: hasValidSignature,
+        hasValidUserAgent: hasValidUserAgent,
+        action: "blocked_aggressive_validation"
+      });
       
-      if (!isValid) {
-        log("WARN", "POST /webhook/whatsapp - Assinatura x-hub-signature-256 inválida", {
+      return res.status(403).json({
+        error: "Forbidden",
+        message: "Requisição não autorizada"
+      });
+    }
+    
+    // Validação de IP (modo monitor - apenas loga, não bloqueia)
+    if (META_IP_VALIDATION_MODE === 'monitor') {
+      const isValidIP = isValidMetaIP(clientIp);
+      if (!isValidIP) {
+        log("INFO", "POST /webhook/whatsapp - IP não conhecido do Meta (monitorando)", {
           requestId,
-          ip: req.ip,
-          signatureReceived: signature,
-          signatureLength: signature?.length || 0,
-          rawBodyLength: rawBody?.length || 0,
-          appSecretLength: APP_SECRET?.length || 0,
-          hasRawBody: !!req.rawBody,
-          rawBodyPreview: req.rawBody ? req.rawBody.toString().substring(0, 100) : null
-        });
-        
-        return res.status(401).json({
-          error: "Unauthorized",
-          message: "Assinatura inválida"
+          ip: clientIp,
+          hasValidSignature: hasValidSignature,
+          hasValidUserAgent: hasValidUserAgent,
+          action: "allowed_but_monitored"
         });
       }
-      
+    } else if (META_IP_VALIDATION_MODE === 'block') {
+      const isValidIP = isValidMetaIP(clientIp);
+      if (!isValidIP) {
+        if (IS_PRODUCTION) {
+          // PRODUÇÃO: Bloqueia IP inválido
+          log("WARN", "POST /webhook/whatsapp - IP bloqueado: não está na whitelist do Meta", {
+            requestId,
+            ip: clientIp,
+            environment: NODE_ENV,
+            action: "blocked_ip_not_whitelisted"
+          });
+          
+          return res.status(403).json({
+            error: "Forbidden",
+            message: "IP de origem não autorizado"
+          });
+        } else {
+          // DESENVOLVIMENTO: Apenas loga, não bloqueia
+          log("WARN", "POST /webhook/whatsapp - IP não whitelisted permitido (modo desenvolvimento)", {
+            requestId,
+            ip: clientIp,
+            environment: NODE_ENV,
+            action: "allowed_dev_mode"
+          });
+          // Continua processamento (não bloqueia em desenvolvimento)
+        }
+      }
+    }
+    
+    // Log de validação bem-sucedida
+    if (hasValidSignature) {
       log("INFO", "POST /webhook/whatsapp - Assinatura x-hub-signature-256 válida", {
         requestId,
         signatureLength: signature?.length || 0
-      });
-    } else {
-      log("INFO", "POST /webhook/whatsapp - Validação de assinatura ignorada (APP_SECRET não configurado)", {
-        requestId,
-        hasSignature: !!req.headers['x-hub-signature-256'],
-        xHubSignature256: req.headers['x-hub-signature-256'] || null
       });
     }
     

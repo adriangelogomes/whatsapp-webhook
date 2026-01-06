@@ -1,5 +1,49 @@
 # 🔧 Configuração do Webhook no Meta/Facebook
 
+## ⚠️ Problema: Meta não consegue acessar o webhook
+
+### Sintoma: "Não foi possível validar a URL de callback ou o token de verificação"
+
+Este erro geralmente ocorre por um dos seguintes motivos:
+
+### 🔴 Problema Crítico: Erro SSL/TLS
+
+Se você está vendo este erro no n8n ao tentar HTTPS:
+```
+EPROTO SSL handshake failure
+```
+
+**Isso significa que o Meta também não consegue acessar!** O Meta **EXIGE HTTPS** e se há problema SSL, a validação falha.
+
+**Solução Imediata:**
+
+1. **Verifique Cloudflare SSL/TLS Mode:**
+   - Acesse Cloudflare Dashboard
+   - Vá em **SSL/TLS** → **Overview**
+   - Configure para **Full (strict)** ou **Full**
+   - ⚠️ **NÃO use "Flexible"** - isso causa problemas
+
+2. **Verifique o Certificado SSL:**
+   ```bash
+   openssl s_client -connect whatsapp.api.sofiainsights.com.br:443 -servername whatsapp.api.sofiainsights.com.br
+   ```
+   
+   Procure por:
+   - `Verify return code: 0 (ok)` ✅
+   - Se aparecer erro, o certificado está inválido
+
+3. **Teste a URL HTTPS publicamente:**
+   ```bash
+   curl -v "https://whatsapp.api.sofiainsights.com.br/health"
+   ```
+   
+   Se funcionar, o problema pode ser específico do n8n (mas o Meta deve funcionar)
+
+4. **Use HTTP interno no n8n (temporário):**
+   - Se n8n está na mesma rede do EasyPanel
+   - Use: `http://whatsapp-webhook:3000/webhook/whatsapp`
+   - Isso não afeta o Meta (que usa HTTPS externo)
+
 ## ⚠️ Problema Comum: "Não foi possível validar a URL de callback ou o token de verificação"
 
 Este erro geralmente ocorre por um dos seguintes motivos:
