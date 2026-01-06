@@ -14,9 +14,9 @@
 
 import express from "express";
 import amqp from "amqplib";
+import crypto from "crypto";
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
 
 // ============================
 // Sistema de Logging
@@ -189,12 +189,56 @@ function logError(error, context = {}) {
   });
 }
 
+/**
+ * Valida assinatura x-hub-signature-256 do Meta/Facebook
+ * 
+ * O Meta envia a assinatura HMAC-SHA256 do body da requisição no header x-hub-signature-256
+ * O formato é: sha256=<hash>
+ * 
+ * @param {string} signature - Header x-hub-signature-256 recebido (formato: sha256=<hash>)
+ * @param {string|Buffer} body - Body da requisição em formato raw (string ou Buffer)
+ * @param {string} secret - App Secret do WhatsApp Business API (ou WEBHOOK_SECRET como fallback)
+ * @returns {boolean} - true se assinatura válida, false caso contrário
+ */
+function validateHubSignature(signature, body, secret) {
+  if (!signature || !secret) {
+    return false;
+  }
+  
+  try {
+    // Remove o prefixo "sha256=" do header
+    const receivedHash = signature.replace(/^sha256=/, '');
+    
+    // Converte body para Buffer se necessário
+    const bodyBuffer = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    
+    // Calcula HMAC-SHA256 do body usando o secret
+    const calculatedHash = crypto
+      .createHmac('sha256', secret)
+      .update(bodyBuffer)
+      .digest('hex');
+    
+    // Compara usando comparação segura (timing-safe)
+    return crypto.timingSafeEqual(
+      Buffer.from(receivedHash, 'hex'),
+      Buffer.from(calculatedHash, 'hex')
+    );
+  } catch (err) {
+    log("WARN", "Erro ao validar assinatura x-hub-signature-256", { 
+      error: err.message,
+      signature: signature?.substring(0, 20) + "..."
+    });
+    return false;
+  }
+}
+
 // ============================
 // Variáveis de ambiente
 // ============================
 const PORT = process.env.PORT || 3000;
 const RABBIT_URL = process.env.RABBIT_URL;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+const APP_SECRET = process.env.APP_SECRET || WEBHOOK_SECRET; // Usa WEBHOOK_SECRET como fallback
 
 const EXCHANGE = process.env.RABBIT_EXCHANGE || "whatsapp.events";
 const QUEUE = process.env.RABBIT_QUEUE || "whatsapp.incoming";
@@ -311,6 +355,27 @@ async function connectRabbit() {
 
 // Inicia conexão
 connectRabbit();
+
+// Middleware JSON padrão (para todas as rotas exceto POST /webhook/whatsapp)
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/webhook/whatsapp') {
+    // Para POST /webhook/whatsapp, captura raw body e faz parsing manual após validação
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      req.rawBody = Buffer.concat(chunks);
+      try {
+        req.body = JSON.parse(req.rawBody.toString());
+      } catch (err) {
+        req.body = {};
+      }
+      next();
+    });
+  } else {
+    // Para outras rotas, usa JSON parsing padrão
+    express.json({ limit: "2mb" })(req, res, next);
+  }
+});
 
 // ============================
 // Middleware de logging de requisições
@@ -658,6 +723,57 @@ app.post("/webhook/whatsapp", validateWebhookSecret, async (req, res) => {
   const startTime = Date.now();
   
   try {
+    // Valida assinatura x-hub-signature-256 se APP_SECRET estiver configurado
+    if (APP_SECRET) {
+      const signature = req.headers['x-hub-signature-256'];
+      
+      if (!signature) {
+        log("WARN", "POST /webhook/whatsapp - Header x-hub-signature-256 ausente", {
+          requestId,
+          ip: req.ip,
+          headers: req.headers
+        });
+        
+        return res.status(401).json({
+          error: "Unauthorized",
+          message: "Assinatura x-hub-signature-256 não fornecida"
+        });
+      }
+      
+      // Valida assinatura usando o raw body
+      const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body));
+      const isValid = validateHubSignature(signature, rawBody, APP_SECRET);
+      
+      if (!isValid) {
+        log("WARN", "POST /webhook/whatsapp - Assinatura x-hub-signature-256 inválida", {
+          requestId,
+          ip: req.ip,
+          signatureReceived: signature,
+          signatureLength: signature?.length || 0,
+          rawBodyLength: rawBody?.length || 0,
+          appSecretLength: APP_SECRET?.length || 0,
+          hasRawBody: !!req.rawBody,
+          rawBodyPreview: req.rawBody ? req.rawBody.toString().substring(0, 100) : null
+        });
+        
+        return res.status(401).json({
+          error: "Unauthorized",
+          message: "Assinatura inválida"
+        });
+      }
+      
+      log("INFO", "POST /webhook/whatsapp - Assinatura x-hub-signature-256 válida", {
+        requestId,
+        signatureLength: signature?.length || 0
+      });
+    } else {
+      log("INFO", "POST /webhook/whatsapp - Validação de assinatura ignorada (APP_SECRET não configurado)", {
+        requestId,
+        hasSignature: !!req.headers['x-hub-signature-256'],
+        xHubSignature256: req.headers['x-hub-signature-256'] || null
+      });
+    }
+    
     // Log completo da requisição recebida (TODAS as informações)
     logFullRequest(req, requestId, "POST /webhook/whatsapp - Webhook recebido");
     
