@@ -419,6 +419,16 @@ const EXCHANGE = process.env.RABBIT_EXCHANGE || "whatsapp.events";
 const QUEUE = process.env.RABBIT_QUEUE || "whatsapp.incoming";
 const ROUTING_KEY = process.env.RABBIT_ROUTING_KEY || "whatsapp.incoming";
 
+// IPs confiáveis (sem autenticação): TRUSTED_IPS=10.0.0.1,10.0.0.2
+const TRUSTED_IPS = process.env.TRUSTED_IPS
+  ? process.env.TRUSTED_IPS.split(",").map(ip => ip.trim()).filter(Boolean)
+  : [];
+
+// Domínios confiáveis (sem autenticação): TRUSTED_DOMAINS=meuapp.com,outro.com.br
+const TRUSTED_DOMAINS = process.env.TRUSTED_DOMAINS
+  ? process.env.TRUSTED_DOMAINS.split(",").map(d => d.trim().toLowerCase()).filter(Boolean)
+  : [];
+
 // Variáveis de segurança
 const NODE_ENV = process.env.NODE_ENV || "production"; // production ou development
 const IS_PRODUCTION = NODE_ENV === "production";
@@ -543,6 +553,9 @@ async function connectRabbit() {
 
 // Inicia conexão
 connectRabbit();
+
+// Confia no primeiro proxy (necessário para req.ip retornar o IP real do cliente)
+app.set("trust proxy", 1);
 
 // ============================
 // Headers de Segurança HTTP (Helmet)
@@ -689,6 +702,40 @@ function validateWebhookSecret(req, res, next) {
   // Log completo da requisição antes da validação
   logFullRequest(req, requestId, "Middleware de autenticação - Requisição recebida");
   
+  // Se o IP da requisição estiver na lista de IPs confiáveis, pula autenticação
+  const clientIp = req.ip || req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.connection.remoteAddress;
+  if (TRUSTED_IPS.length > 0 && TRUSTED_IPS.includes(clientIp)) {
+    log("INFO", "Requisição aceita por IP confiável (sem autenticação)", {
+      requestId,
+      ip: clientIp,
+      path: req.path
+    });
+    return next();
+  }
+
+  // Se o domínio da requisição (Origin ou Referer) estiver na lista de domínios confiáveis, pula autenticação
+  if (TRUSTED_DOMAINS.length > 0) {
+    const origin = req.headers["origin"] || req.headers["referer"] || "";
+    const matchedDomain = TRUSTED_DOMAINS.find(domain => {
+      try {
+        const hostname = new URL(origin).hostname.toLowerCase();
+        return hostname === domain || hostname.endsWith(`.${domain}`);
+      } catch {
+        return false;
+      }
+    });
+
+    if (matchedDomain) {
+      log("INFO", "Requisição aceita por domínio confiável (sem autenticação)", {
+        requestId,
+        origin,
+        matchedDomain,
+        path: req.path
+      });
+      return next();
+    }
+  }
+
   // Se WEBHOOK_SECRET não estiver configurado, permite requisições sem autenticação
   if (!WEBHOOK_SECRET) {
     log("INFO", "Requisição aceita sem autenticação (WEBHOOK_SECRET não configurado)", {
