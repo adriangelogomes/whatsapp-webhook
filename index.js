@@ -1052,8 +1052,24 @@ app.post("/webhook/whatsapp", async (req, res) => {
       hasValidSignature = validateHubSignature(signature, rawBody, APP_SECRET);
     }
     
+    // Verifica se o IP ou domínio de origem é confiável (bypass da validação agressiva)
+    const isTrustedSource = (() => {
+      if (TRUSTED_IPS.length > 0 && TRUSTED_IPS.includes(clientIp)) return true;
+      if (TRUSTED_DOMAINS.length > 0) {
+        const origin = req.headers["origin"] || req.headers["referer"] || "";
+        return TRUSTED_DOMAINS.some(domain => {
+          try {
+            const hostname = new URL(origin).hostname.toLowerCase();
+            return hostname === domain || hostname.endsWith(`.${domain}`);
+          } catch { return false; }
+        });
+      }
+      return false;
+    })();
+
     // VALIDAÇÃO AGRESSIVA: Se não tem assinatura válida E não tem User-Agent → BLOQUEIA
-    if (!hasValidSignature && !hasValidUserAgent) {
+    // (exceto se for de uma origem confiável)
+    if (!isTrustedSource && !hasValidSignature && !hasValidUserAgent) {
       log("WARN", "POST /webhook/whatsapp - Requisição bloqueada: sem assinatura válida e sem User-Agent correto", {
         requestId,
         ip: clientIp,
