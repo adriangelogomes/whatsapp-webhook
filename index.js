@@ -703,7 +703,7 @@ function validateWebhookSecret(req, res, next) {
   logFullRequest(req, requestId, "Middleware de autenticação - Requisição recebida");
   
   // Se o IP da requisição estiver na lista de IPs confiáveis, pula autenticação
-  const clientIp = req.ip || req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.connection.remoteAddress;
+  const clientIp = getClientIP(req);
   if (TRUSTED_IPS.length > 0 && TRUSTED_IPS.includes(clientIp)) {
     log("INFO", "Requisição aceita por IP confiável (sem autenticação)", {
       requestId,
